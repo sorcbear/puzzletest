@@ -162,12 +162,17 @@
   }
 
   function xyToNearestCell(x, y) {
-    const col = Math.round(x / state.cellSize);
-    const row = Math.round(y / state.cellSize);
-    const c = Math.max(0, Math.min(N - 1, col));
-    const r = Math.max(0, Math.min(N - 1, row));
-    return r * N + c;
-  }
+  // 用“中心点”而不是左上角
+  const cx = x + state.cellSize / 2;
+  const cy = y + state.cellSize / 2;
+
+  const col = Math.round(cx / state.cellSize);
+  const row = Math.round(cy / state.cellSize);
+
+  const c = Math.max(0, Math.min(N - 1, col));
+  const r = Math.max(0, Math.min(N - 1, row));
+  return r * N + c;
+}
 
   function setToast(msg) {
     toast.textContent = msg || "";
