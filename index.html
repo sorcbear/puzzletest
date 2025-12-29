@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport"
+        content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>2×2 拖拽拼图</title>
+  <style>
+    :root {
+      --board: 320px;         /* 棋盘显示尺寸，可改 */
+      --gap: 10px;            /* 棋盘外边距 */
+      --radius: 14px;
+    }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #f6f7f9;
+      overflow: hidden; /* 避免移动端滚动干扰 */
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+
+    .wrap {
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+
+    .panel {
+      width: min(92vw, var(--board));
+      text-align: center;
+      margin-bottom: 10px;
+    }
+
+    .panel h1 {
+      margin: 0 0 6px;
+      font-size: 18px;
+      font-weight: 650;
+    }
+
+    .panel p {
+      margin: 0;
+      color: #666;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .board {
+      width: min(92vw, var(--board));
+      aspect-ratio: 1 / 1;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: var(--radius);
+      position: relative;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.06);
+      touch-action: none; /* 关键：禁用默认触控手势 */
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    /* 2×2 网格辅助线（可删） */
+    .gridline {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: var(--radius);
+      background:
+        linear-gradient(to right, transparent 49.5%, #eef0f4 50%, transparent 50.5%),
+        linear-gradient(to bottom, transparent 49.5%, #eef0f4 50%, transparent 50.5%);
+    }
+
+    .piece {
+      position: absolute;
+      border-radius: 12px;
+      box-shadow: 0 10px 18px rgba(0,0,0,0.12);
+      border: 1px solid rgba(0,0,0,0.08);
+      display: grid;
+      place-items: center;
+      font-size: 28px;
+      font-weight: 750;
+      color: rgba(255,255,255,0.92);
+      touch-action: none; /* 关键：piece 也禁用 */
+      transition: transform 120ms ease, left 160ms ease, top 160ms ease;
+      will-change: left, top, transform;
+    }
+
+    .piece.dragging {
+      transform: scale(1.04);
+      transition: none;
+      z-index: 10;
+      cursor: grabbing;
+    }
+
+    .btns {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 12px;
+    }
+
+    button {
+      border: 1px solid #e5e7eb;
+      background: #fff;
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .toast {
+      margin-top: 10px;
+      min-height: 18px;
+      font-size: 14px;
+      font-weight: 650;
+      color: #0f766e;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <h1>2×2 拖拽拼图</h1>
+      <p>拖动拼图块到对应格子。松手会吸附到最近格子；格子被占用会回弹。</p>
+      <div class="btns">
+        <button id="shuffleBtn">打乱</button>
+        <button id="resetBtn">复原</button>
+      </div>
+      <div class="toast" id="toast"></div>
+    </div>
+
+    <div class="board" id="board">
+      <div class="gridline"></div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const board = document.getElementById("board");
+  const toast = document.getElementById("toast");
+  const shuffleBtn = document.getElementById("shuffleBtn");
+  const resetBtn = document.getElementById("resetBtn");
+
+  const N = 2; // 2×2
+  const pieces = [];
+  const state = {
+    cellSize: 0,
+    boardLeft: 0,
+    boardTop: 0,
+    occupancy: new Array(N * N).fill(null), // 每格放哪个 pieceId
+  };
+
+  // 目标位置：piece i 应该在 cell i（0..3）
+  // pieceId: 0..3
+  // cellIndex: row*N + col
+  function cellToXY(cellIndex) {
+    const row = Math.floor(cellIndex / N);
+    const col = cellIndex % N;
+    return { x: col * state.cellSize, y: row * state.cellSize };
+  }
+
+  function xyToNearestCell(x, y) {
+    const col = Math.round(x / state.cellSize);
+    const row = Math.round(y / state.cellSize);
+    const c = Math.max(0, Math.min(N - 1, col));
+    const r = Math.max(0, Math.min(N - 1, row));
+    return r * N + c;
+  }
+
+  function setToast(msg) {
+    toast.textContent = msg || "";
+  }
+
+  function measure() {
+    const rect = board.getBoundingClientRect();
+    state.cellSize = rect.width / N;
+    state.boardLeft = rect.left;
+    state.boardTop = rect.top;
+
+    // 更新每块尺寸
+    for (const p of pieces) {
+      p.el.style.width = `${state.cellSize}px`;
+      p.el.style.height = `${state.cellSize}px`;
+    }
+
+    // 按当前占用的格子重新摆放（吸附对齐）
+    for (const p of pieces) {
+      const { x, y } = cellToXY(p.cellIndex);
+      p.x = x; p.y = y;
+      p.el.style.left = `${x}px`;
+      p.el.style.top  = `${y}px`;
+    }
+  }
+
+  function isSolved() {
+    return pieces.every(p => p.cellIndex === p.goalCell);
+  }
+
+  function rebuildOccupancy() {
+    state.occupancy.fill(null);
+    for (const p of pieces) {
+      state.occupancy[p.cellIndex] = p.id;
+    }
+  }
+
+  function movePieceToCell(piece, newCell) {
+    // 更新占用表
+    state.occupancy[piece.cellIndex] = null;
+    state.occupancy[newCell] = piece.id;
+
+    piece.cellIndex = newCell;
+    const { x, y } = cellToXY(newCell);
+    piece.x = x; piece.y = y;
+    piece.el.style.left = `${x}px`;
+    piece.el.style.top  = `${y}px`;
+  }
+
+  function resetSolvedHint() {
+    setToast("");
+  }
+
+  function showSolvedHintIfNeeded() {
+    if (isSolved()) {
+      setToast("完成了。");
+      // 可选：轻微震动
+      if (navigator.vibrate) navigator.vibrate(25);
+    }
+  }
+
+  function createPieces() {
+    // 清空旧 DOM
+    board.querySelectorAll(".piece").forEach(el => el.remove());
+    pieces.length = 0;
+
+    // 简单配色（不依赖图片）
+    const colors = ["#2563eb", "#7c3aed", "#ea580c", "#16a34a"];
+    for (let id = 0; id < 4; id++) {
+      const el = document.createElement("div");
+      el.className = "piece";
+      el.textContent = String(id + 1);
+      el.style.background = colors[id];
+      board.appendChild(el);
+
+      pieces.push({
+        id,
+        el,
+        goalCell: id,   // 目标格
+        cellIndex: id,  // 初始格（复原状态）
+        x: 0,
+        y: 0,
+        dragging: false,
+        pointerId: null,
+        offsetX: 0,
+        offsetY: 0,
+        startCell: id,
+        startLeft: 0,
+        startTop: 0,
+      });
+    }
+    rebuildOccupancy();
+    measure();
+    attachInputHandlers();
+  }
+
+  function attachInputHandlers() {
+    for (const p of pieces) {
+      // 避免重复绑定
+      p.el.onpointerdown = null;
+      p.el.onpointermove = null;
+      p.el.onpointerup = null;
+      p.el.onpointercancel = null;
+
+      p.el.addEventListener("pointerdown", (e) => {
+        resetSolvedHint();
+
+        p.dragging = true;
+        p.pointerId = e.pointerId;
+        p.el.setPointerCapture(p.pointerId);
+        p.el.classList.add("dragging");
+
+        // 记录拖拽偏移，让手指位置保持相对块不跳动
+        const rect = p.el.getBoundingClientRect();
+        p.offsetX = e.clientX - rect.left;
+        p.offsetY = e.clientY - rect.top;
+
+        p.startCell = p.cellIndex;
+        p.startLeft = p.x;
+        p.startTop  = p.y;
+
+        // 拖拽时临时释放占用（这样可以把块拖到原格之外）
+        state.occupancy[p.cellIndex] = null;
+
+        // 小震动反馈（可选）
+        if (navigator.vibrate) navigator.vibrate(8);
+      });
+
+      p.el.addEventListener("pointermove", (e) => {
+        if (!p.dragging || e.pointerId !== p.pointerId) return;
+
+        const x = e.clientX - state.boardLeft - p.offsetX;
+        const y = e.clientY - state.boardTop  - p.offsetY;
+
+        // 限制在棋盘内（可稍微放宽）
+        const max = state.cellSize * (N - 1);
+        const clampedX = Math.max(0, Math.min(max, x));
+        const clampedY = Math.max(0, Math.min(max, y));
+
+        p.x = clampedX;
+        p.y = clampedY;
+        p.el.style.left = `${clampedX}px`;
+        p.el.style.top  = `${clampedY}px`;
+      });
+
+      function endDrag(e) {
+        if (!p.dragging || e.pointerId !== p.pointerId) return;
+        p.dragging = false;
+        p.el.classList.remove("dragging");
+
+        // 计算最近格子
+        const targetCell = xyToNearestCell(p.x, p.y);
+
+        // 如果目标格被占用 -> 回弹到起始格
+        if (state.occupancy[targetCell] !== null) {
+          // 重新占用起始格
+          state.occupancy[p.startCell] = p.id;
+          p.cellIndex = p.startCell;
+          p.x = p.startLeft;
+          p.y = p.startTop;
+          p.el.style.left = `${p.startLeft}px`;
+          p.el.style.top  = `${p.startTop}px`;
+          return;
+        }
+
+        // 否则吸附到目标格
+        movePieceToCell(p, targetCell);
+        showSolvedHintIfNeeded();
+      }
+
+      p.el.addEventListener("pointerup", endDrag);
+      p.el.addEventListener("pointercancel", (e) => {
+        // cancel 也回弹
+        if (!p.dragging || e.pointerId !== p.pointerId) return;
+        p.dragging = false;
+        p.el.classList.remove("dragging");
+        // 回弹到起始
+        state.occupancy[p.startCell] = p.id;
+        p.cellIndex = p.startCell;
+        p.x = p.startLeft;
+        p.y = p.startTop;
+        p.el.style.left = `${p.startLeft}px`;
+        p.el.style.top  = `${p.startTop}px`;
+      });
+    }
+  }
+
+  function shuffle() {
+    setToast("");
+    // 简单随机打乱 piece -> cell 映射
+    const cells = [0,1,2,3];
+    for (let i = cells.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cells[i], cells[j]] = [cells[j], cells[i]];
+    }
+
+    state.occupancy.fill(null);
+    for (const p of pieces) {
+      const newCell = cells[p.id];
+      p.cellIndex = newCell;
+      state.occupancy[newCell] = p.id;
+      const { x, y } = cellToXY(newCell);
+      p.x = x; p.y = y;
+      p.el.style.left = `${x}px`;
+      p.el.style.top  = `${y}px`;
+    }
+
+    // 如果打乱后刚好完成，重新打乱一次（简单处理）
+    if (isSolved()) shuffle();
+  }
+
+  function reset() {
+    setToast("");
+    state.occupancy.fill(null);
+    for (const p of pieces) {
+      p.cellIndex = p.goalCell;
+      state.occupancy[p.cellIndex] = p.id;
+      const { x, y } = cellToXY(p.cellIndex);
+      p.x = x; p.y = y;
+      p.el.style.left = `${x}px`;
+      p.el.style.top  = `${y}px`;
+    }
+  }
+
+  shuffleBtn.addEventListener("click", shuffle);
+  resetBtn.addEventListener("click", reset);
+  window.addEventListener("resize", measure);
+
+  createPieces();
+  shuffle(); // 默认先打乱
+})();
+</script>
+</body>
+</html>
