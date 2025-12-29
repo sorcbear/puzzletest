@@ -319,29 +319,52 @@
       });
 
       function endDrag(e) {
-        if (!p.dragging || e.pointerId !== p.pointerId) return;
-        p.dragging = false;
-        p.el.classList.remove("dragging");
+  if (!p.dragging || e.pointerId !== p.pointerId) return;
+  p.dragging = false;
+  p.el.classList.remove("dragging");
 
-        // 计算最近格子
-        const targetCell = xyToNearestCell(p.x, p.y);
+  const targetCell = xyToNearestCell(p.x, p.y);
 
-        // 如果目标格被占用 -> 回弹到起始格
-        if (state.occupancy[targetCell] !== null) {
-          // 重新占用起始格
-          state.occupancy[p.startCell] = p.id;
-          p.cellIndex = p.startCell;
-          p.x = p.startLeft;
-          p.y = p.startTop;
-          p.el.style.left = `${p.startLeft}px`;
-          p.el.style.top  = `${p.startTop}px`;
-          return;
-        }
+  // 目标格子当前占用者（可能为空）
+  const otherId = state.occupancy[targetCell];
 
-        // 否则吸附到目标格
-        movePieceToCell(p, targetCell);
-        showSolvedHintIfNeeded();
-      }
+  if (otherId === null) {
+    // 目标格空：直接吸附
+    movePieceToCell(p, targetCell);
+    showSolvedHintIfNeeded();
+    return;
+  }
+
+  if (otherId === p.id) {
+    // 落回自己：也吸附即可
+    movePieceToCell(p, targetCell);
+    showSolvedHintIfNeeded();
+    return;
+  }
+
+  // ===== 核心：占用则交换 =====
+  const other = pieces.find(x => x.id === otherId);
+  const fromCell = p.startCell; // 被拖拽块原来的格子（你在 pointerdown 已记录）
+
+  // 让“另一块”回到 fromCell
+  state.occupancy[fromCell] = other.id;
+  other.cellIndex = fromCell;
+  const a = cellToXY(fromCell);
+  other.x = a.x; other.y = a.y;
+  other.el.style.left = `${a.x}px`;
+  other.el.style.top  = `${a.y}px`;
+
+  // 再把当前块放到 targetCell
+  state.occupancy[targetCell] = p.id;
+  p.cellIndex = targetCell;
+  const b = cellToXY(targetCell);
+  p.x = b.x; p.y = b.y;
+  p.el.style.left = `${b.x}px`;
+  p.el.style.top  = `${b.y}px`;
+
+  showSolvedHintIfNeeded();
+}
+
 
       p.el.addEventListener("pointerup", endDrag);
       p.el.addEventListener("pointercancel", (e) => {
